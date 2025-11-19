@@ -1,4 +1,3 @@
-import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -7,7 +6,6 @@ import requests
 from dotenv import load_dotenv
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.stdio import stdio_server
 
 # --------------------------------------------------------------------
 #  Env / config
@@ -460,14 +458,5 @@ def jira_create_issue(
 # --------------------------------------------------------------------
 
 
-async def main() -> None:
-    async with stdio_server() as (read_stream, write_stream):
-        await mcp.run(
-            read_stream,
-            write_stream,
-            mcp.create_initialization_options(),
-        )
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    mcp.run(transport="stdio")

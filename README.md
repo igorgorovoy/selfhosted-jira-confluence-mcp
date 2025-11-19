@@ -129,14 +129,34 @@ This will fetch and display all available Confluence spaces.
 
 ## 🛠️ Development
 
-Run in development mode:
+### Option 1: Direct Python execution
+
+The server can be run directly for testing:
 
 ```bash
 source venv/bin/activate
-mcp dev server.py
+python server.py
 ```
 
-This will start the MCP server in development mode with live reload.
+This starts the MCP server in STDIO mode. The server will wait for input on stdin and write responses to stdout. Press `Ctrl+C` to stop.
+
+**Note**: When running directly, the server expects MCP protocol messages on stdin. For actual testing with Confluence/Jira, use the integration method below or the test scripts.
+
+### Option 2: Integration testing with Cursor
+
+For real-world testing, configure the server in Cursor (see "🔌 Connecting to Cursor" section above). The server will start automatically when Cursor launches and will be available through the AI chat interface.
+
+This is the recommended way to test the server with actual Confluence and Jira operations.
+
+### Option 3: Development mode with MCP CLI (optional)
+
+If you have the `mcp` CLI tool installed globally:
+
+```bash
+~/.default-venv/bin/mcp dev server.py
+```
+
+This will start the MCP server in development mode with inspector UI for debugging.
 
 ## 📚 API References
 
