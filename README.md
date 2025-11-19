@@ -1,0 +1,1 @@
+# selfhosted-jira-confluence-mcp
