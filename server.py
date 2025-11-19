@@ -92,6 +92,14 @@ class ConfluenceClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_spaces(self, limit: int = 100, start: int = 0) -> Dict[str, Any]:
+        resp = self.session.get(
+            self._url("/space"),
+            params={"limit": limit, "start": start, "expand": "description.plain,homepage"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def create_page(
         self,
         space_key: str,
@@ -271,6 +279,42 @@ def confluence_search_pages(cql: str, limit: int = 25, start: int = 0) -> Dict[s
         "size": data.get("size"),
         "limit": data.get("limit"),
         "results": results,
+        "raw": data,
+    }
+
+
+@mcp.tool()
+def confluence_get_spaces(limit: int = 100, start: int = 0) -> Dict[str, Any]:
+    """
+    Get list of Confluence spaces.
+
+    Returns information about all available spaces in Confluence.
+    """
+    client = get_confluence_client_singleton()
+    try:
+        data = client.get_spaces(limit=limit, start=start)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Confluence get_spaces failed: {e}") from e
+
+    spaces: List[Dict[str, Any]] = []
+    for space in data.get("results", []):
+        spaces.append(
+            {
+                "key": space.get("key"),
+                "name": space.get("name"),
+                "type": space.get("type"),
+                "status": space.get("status"),
+                "description": (space.get("description") or {}).get("plain"),
+                "homepage": (space.get("homepage") or {}).get("id"),
+                "url": space.get("_links", {}).get("self"),
+            }
+        )
+
+    return {
+        "size": data.get("size"),
+        "limit": data.get("limit"),
+        "total": len(spaces),
+        "spaces": spaces,
         "raw": data,
     }
 
