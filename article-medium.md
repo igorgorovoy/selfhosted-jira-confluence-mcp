@@ -2,6 +2,8 @@
 
 ![MCP Server in Action](4d2ead5a-d521-4648-89c1-e07ccb40dbea.png)
 
+> **Source code:** [github.com/igorgorovoy/selfhosted-jira-confluence-mcp](https://github.com/igorgorovoy/selfhosted-jira-confluence-mcp)
+
 ## Why your AI assistant doesn't know about your corporate wiki
 
 If you've ever tried asking Claude or ChatGPT about your team's Confluence documentation or Jira tickets, you've hit the same wall: these AI models have no access to your private infrastructure. While cloud-based solutions exist for cloud-hosted Atlassian instances, self-hosted enterprise environments remain largely isolated from modern AI capabilities.
@@ -666,7 +668,7 @@ Testing with 1000 requests on typical queries:
 
 ### Community contributions welcome
 
-The project is open source and actively maintained. Key areas for contribution:
+The project is [open source on GitHub](https://github.com/igorgorovoy/selfhosted-jira-confluence-mcp) and actively maintained. Key areas for contribution:
 
 - Additional Atlassian products (Bitbucket, Bamboo)
 - Enhanced error handling and retry logic
@@ -684,7 +686,7 @@ The future of enterprise software isn't about replacing human expertise - it's a
 
 ---
 
-**Project:** [Selfhosted Jira & Confluence MCP Server](https://github.com/yourusername/selfhosted-jira-confluence-mcp)  
+**Project:** [Selfhosted Jira & Confluence MCP Server](https://github.com/igorgorovoy/selfhosted-jira-confluence-mcp)  
 **License:** MIT  
 **Author:** Igor Gorovyy
 
@@ -699,7 +701,7 @@ The future of enterprise software isn't about replacing human expertise - it's a
 ## Getting started
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/igorgorovoy/selfhosted-jira-confluence-mcp.git
 cd selfhosted-jira-confluence-mcp
 python -m venv venv
 source venv/bin/activate
