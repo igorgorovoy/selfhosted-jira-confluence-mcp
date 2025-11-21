@@ -124,6 +124,15 @@ class ConfluenceClient:
         resp.raise_for_status()
         return resp.json()
 
+    def delete_page(self, page_id: str, status: str = "current") -> None:
+        """
+        Delete a Confluence page by ID.
+
+        By default deletes the current version. Confluence may return 204 No Content on success.
+        """
+        resp = self.session.delete(self._url(f"/content/{page_id}"), params={"status": status})
+        resp.raise_for_status()
+
 
 class JiraClient:
     """
@@ -185,6 +194,16 @@ class JiraClient:
         resp = self.session.post(self._url("/issue"), json=payload)
         resp.raise_for_status()
         return resp.json()
+
+    def delete_issue(self, issue_key: str, delete_subtasks: bool = False) -> None:
+        """
+        Delete Jira issue by key.
+
+        If delete_subtasks is True, Jira will also delete all subtasks of the issue.
+        """
+        params = {"deleteSubtasks": str(delete_subtasks).lower()}
+        resp = self.session.delete(self._url(f"/issue/{issue_key}"), params=params)
+        resp.raise_for_status()
 
 
 # --------------------------------------------------------------------
@@ -350,6 +369,27 @@ def confluence_create_page(
     }
 
 
+@mcp.tool()
+def confluence_delete_page(page_id: str, status: str = "current") -> Dict[str, Any]:
+    """
+    Delete a Confluence page by ID (6.14.1 Server/DC).
+
+    WARNING: this actually deletes content in Confluence. Some configurations move the page
+    to trash for certain status values; others may remove it permanently.
+    """
+    client = get_confluence_client_singleton()
+    try:
+        client.delete_page(page_id=page_id, status=status)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Confluence delete_page failed: {e}") from e
+
+    return {
+        "id": page_id,
+        "status": "deleted",
+        "delete_status_param": status,
+    }
+
+
 # ---------------- Jira tools -----------------
 
 
@@ -450,6 +490,26 @@ def jira_create_issue(
         "id": data.get("id"),
         "self": data.get("self"),
         "raw": data,
+    }
+
+
+@mcp.tool()
+def jira_delete_issue(issue_key: str, delete_subtasks: bool = False) -> Dict[str, Any]:
+    """
+    Delete Jira issue by key (Jira Server/DC 8.8.0).
+
+    WARNING: this actually deletes issues in Jira Server/DC.
+    """
+    client = get_jira_client_singleton()
+    try:
+        client.delete_issue(issue_key=issue_key, delete_subtasks=delete_subtasks)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Jira delete_issue failed: {e}") from e
+
+    return {
+        "key": issue_key,
+        "deleted": True,
+        "delete_subtasks": delete_subtasks,
     }
 
 
