@@ -124,6 +124,35 @@ class ConfluenceClient:
         resp.raise_for_status()
         return resp.json()
 
+    def create_space(
+        self,
+        key: str,
+        name: str,
+        description: Optional[str] = None,
+        space_type: str = "global",
+    ) -> Dict[str, Any]:
+        """
+        Create a Confluence space.
+
+        Wrapper around POST /rest/api/space.
+        """
+        payload: Dict[str, Any] = {
+            "key": key,
+            "name": name,
+            "type": space_type,
+        }
+        if description:
+            payload["description"] = {
+                "plain": {
+                    "value": description,
+                    "representation": "plain",
+                }
+            }
+
+        resp = self.session.post(self._url("/space"), json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
     def delete_page(self, page_id: str, status: str = "current") -> None:
         """
         Delete a Confluence page by ID.
@@ -230,6 +259,36 @@ class JiraClient:
             params["issuetypeNames"] = issue_type_name
 
         resp = self.session.get(self._url("/issue/createmeta"), params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_project(
+        self,
+        key: str,
+        name: str,
+        project_type_key: str,
+        lead: str,
+        description: Optional[str] = None,
+        extra_fields: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create Jira project (Server/DC 8.8.0).
+
+        Minimal wrapper around POST /rest/api/2/project. The caller is responsible
+        for passing a valid combination of type/template/lead according to Jira settings.
+        """
+        payload: Dict[str, Any] = {
+            "key": key,
+            "name": name,
+            "projectTypeKey": project_type_key,
+            "lead": lead,
+        }
+        if description:
+            payload["description"] = description
+        if extra_fields:
+            payload.update(extra_fields)
+
+        resp = self.session.post(self._url("/project"), json=payload)
         resp.raise_for_status()
         return resp.json()
 
@@ -398,6 +457,38 @@ def confluence_create_page(
 
 
 @mcp.tool()
+def confluence_create_space(
+    key: str,
+    name: str,
+    description: Optional[str] = None,
+    space_type: str = "global",
+) -> Dict[str, Any]:
+    """
+    Create a Confluence space.
+
+    WARNING: this actually creates a space in Confluence.
+    """
+    client = get_confluence_client_singleton()
+    try:
+        data = client.create_space(
+            key=key,
+            name=name,
+            description=description,
+            space_type=space_type,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"Confluence create_space failed: {e}") from e
+
+    return {
+        "key": data.get("key"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "links": data.get("_links"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
 def confluence_delete_page(page_id: str, status: str = "current") -> Dict[str, Any]:
     """
     Delete a Confluence page by ID (6.14.1 Server/DC).
@@ -529,6 +620,41 @@ def jira_create_issue(
         raise RuntimeError(f"Jira create_issue failed: {e}{detail}") from e
     except requests.RequestException as e:
         raise RuntimeError(f"Jira create_issue failed: {e}") from e
+
+    return {
+        "key": data.get("key"),
+        "id": data.get("id"),
+        "self": data.get("self"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
+def jira_create_project(
+    key: str,
+    name: str,
+    project_type_key: str,
+    lead: str,
+    description: Optional[str] = None,
+    extra_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Create Jira project.
+
+    WARNING: this actually creates a project in Jira Server/DC.
+    """
+    client = get_jira_client_singleton()
+    try:
+        data = client.create_project(
+            key=key,
+            name=name,
+            project_type_key=project_type_key,
+            lead=lead,
+            description=description,
+            extra_fields=extra_fields,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"Jira create_project failed: {e}") from e
 
     return {
         "key": data.get("key"),
