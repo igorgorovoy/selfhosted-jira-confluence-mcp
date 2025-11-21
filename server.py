@@ -539,6 +539,49 @@ def jira_create_issue(
 
 
 @mcp.tool()
+def jira_create_issue_debug(
+    project_key: str,
+    issue_type: str,
+    summary: str,
+    description: Optional[str] = None,
+    extra_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Debug helper for Jira issue creation.
+
+    Sends the same payload as jira_create_issue but does NOT raise on non-2xx responses.
+    Returns HTTP status code, request payload and parsed response body (if any).
+    """
+    client = get_jira_client_singleton()
+
+    payload: Dict[str, Any] = {
+        "fields": {
+            "project": {"key": project_key},
+            "summary": summary,
+            "issuetype": {"name": issue_type},
+        }
+    }
+    if description:
+        payload["fields"]["description"] = description
+    if extra_fields:
+        payload["fields"].update(extra_fields)
+
+    resp = client.session.post(client._url("/issue"), json=payload)  # type: ignore[attr-defined]
+
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {"raw_text": resp.text}
+
+    return {
+        "status_code": resp.status_code,
+        "ok": resp.ok,
+        "request_payload": payload,
+        "response_body": body,
+    }
+
+
+@mcp.tool()
 def jira_delete_issue(issue_key: str, delete_subtasks: bool = False) -> Dict[str, Any]:
     """
     Delete Jira issue by key (Jira Server/DC 8.8.0).
