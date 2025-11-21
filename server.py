@@ -180,6 +180,7 @@ class JiraClient:
         issue_type: str,
         summary: str,
         description: Optional[str] = None,
+        extra_fields: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "fields": {
@@ -190,6 +191,11 @@ class JiraClient:
         }
         if description:
             payload["fields"]["description"] = description
+
+        if extra_fields:
+            # Користувач може передати будь-які додаткові поля Jira (у т.ч. customfield_*).
+            # Значення з extra_fields перекривають базові, якщо ключі збігаються.
+            payload["fields"].update(extra_fields)
 
         resp = self.session.post(self._url("/issue"), json=payload)
         resp.raise_for_status()
@@ -204,6 +210,28 @@ class JiraClient:
         params = {"deleteSubtasks": str(delete_subtasks).lower()}
         resp = self.session.delete(self._url(f"/issue/{issue_key}"), params=params)
         resp.raise_for_status()
+
+    def get_createmeta(
+        self,
+        project_key: str,
+        issue_type_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fetch create metadata for a project/issue type.
+
+        Wrapper around /rest/api/2/issue/createmeta with fields expansion so we can
+        see which fields are required and what allowed values they have.
+        """
+        params: Dict[str, Any] = {
+            "projectKeys": project_key,
+            "expand": "projects.issuetypes.fields",
+        }
+        if issue_type_name:
+            params["issuetypeNames"] = issue_type_name
+
+        resp = self.session.get(self._url("/issue/createmeta"), params=params)
+        resp.raise_for_status()
+        return resp.json()
 
 
 # --------------------------------------------------------------------
@@ -468,6 +496,7 @@ def jira_create_issue(
     issue_type: str,
     summary: str,
     description: Optional[str] = None,
+     extra_fields: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create Jira issue.
@@ -481,7 +510,23 @@ def jira_create_issue(
             issue_type=issue_type,
             summary=summary,
             description=description,
+            extra_fields=extra_fields,
         )
+    except requests.HTTPError as e:
+        # Спробуємо дістати детальну інформацію від Jira (errorMessages/errors),
+        # щоб у чаті було видно, яких саме полів не вистачає.
+        detail = ""
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            try:
+                err_json = resp.json()
+                detail = f" | Jira response: {err_json}"
+            except ValueError:
+                # Відповідь не JSON
+                text = resp.text.strip()
+                if text:
+                    detail = f" | Jira raw response: {text}"
+        raise RuntimeError(f"Jira create_issue failed: {e}{detail}") from e
     except requests.RequestException as e:
         raise RuntimeError(f"Jira create_issue failed: {e}") from e
 
@@ -510,6 +555,60 @@ def jira_delete_issue(issue_key: str, delete_subtasks: bool = False) -> Dict[str
         "key": issue_key,
         "deleted": True,
         "delete_subtasks": delete_subtasks,
+    }
+
+
+@mcp.tool()
+def jira_get_createmeta(
+    project_key: str,
+    issue_type_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Get Jira create metadata for a project / issue type.
+
+    Useful to discover which fields are required when creating issues,
+    and what allowed values they can take.
+    """
+    client = get_jira_client_singleton()
+    try:
+        data = client.get_createmeta(project_key=project_key, issue_type_name=issue_type_name)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Jira get_createmeta failed: {e}") from e
+
+    # Build a simplified view of fields for easier inspection in chat.
+    simplified_projects: List[Dict[str, Any]] = []
+    for project in data.get("projects", []):
+        simple_project: Dict[str, Any] = {
+            "key": project.get("key"),
+            "id": project.get("id"),
+            "name": project.get("name"),
+            "issuetypes": [],
+        }
+        for itype in project.get("issuetypes", []):
+            fields = itype.get("fields") or {}
+            simple_fields: List[Dict[str, Any]] = []
+            for field_id, field_def in fields.items():
+                simple_fields.append(
+                    {
+                        "id": field_id,
+                        "name": field_def.get("name"),
+                        "required": field_def.get("required"),
+                        "schema": field_def.get("schema"),
+                        "allowed_values_sample": (field_def.get("allowedValues") or [None])[0],
+                    }
+                )
+            simple_project["issuetypes"].append(
+                {
+                    "id": itype.get("id"),
+                    "name": itype.get("name"),
+                    "fields": simple_fields,
+                }
+            )
+        simplified_projects.append(simple_project)
+
+    return {
+        "projects": simplified_projects,
+        "raw": data,
     }
 
 
