@@ -162,6 +162,15 @@ class ConfluenceClient:
         resp = self.session.delete(self._url(f"/content/{page_id}"), params={"status": status})
         resp.raise_for_status()
 
+    def delete_space(self, key: str) -> None:
+        """
+        Delete a Confluence space by key.
+
+        Wrapper around DELETE /rest/api/space/{spaceKey}.
+        """
+        resp = self.session.delete(self._url(f"/space/{key}"))
+        resp.raise_for_status()
+
 
 class JiraClient:
     """
@@ -291,6 +300,16 @@ class JiraClient:
         resp = self.session.post(self._url("/project"), json=payload)
         resp.raise_for_status()
         return resp.json()
+
+    def delete_project(self, key: str) -> None:
+        """
+        Delete Jira project by key (or ID).
+
+        Wrapper around DELETE /rest/api/2/project/{projectIdOrKey}.
+        Jira typically returns 202 Accepted with an empty body.
+        """
+        resp = self.session.delete(self._url(f"/project/{key}"))
+        resp.raise_for_status()
 
 
 # --------------------------------------------------------------------
@@ -509,6 +528,26 @@ def confluence_delete_page(page_id: str, status: str = "current") -> Dict[str, A
     }
 
 
+@mcp.tool()
+def confluence_delete_space(key: str) -> Dict[str, Any]:
+    """
+    Delete a Confluence space by key.
+
+    WARNING: this actually deletes a space in Confluence. Depending on configuration,
+    it may be moved to trash or removed permanently.
+    """
+    client = get_confluence_client_singleton()
+    try:
+        client.delete_space(key=key)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Confluence delete_space failed: {e}") from e
+
+    return {
+        "key": key,
+        "deleted": True,
+    }
+
+
 # ---------------- Jira tools -----------------
 
 
@@ -724,6 +763,25 @@ def jira_delete_issue(issue_key: str, delete_subtasks: bool = False) -> Dict[str
         "key": issue_key,
         "deleted": True,
         "delete_subtasks": delete_subtasks,
+    }
+
+
+@mcp.tool()
+def jira_delete_project(key: str) -> Dict[str, Any]:
+    """
+    Delete Jira project by key (or ID).
+
+    WARNING: this actually deletes projects in Jira Server/DC.
+    """
+    client = get_jira_client_singleton()
+    try:
+        client.delete_project(key=key)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Jira delete_project failed: {e}") from e
+
+    return {
+        "key": key,
+        "deleted": True,
     }
 
 
