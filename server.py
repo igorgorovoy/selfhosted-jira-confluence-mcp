@@ -1405,17 +1405,20 @@ def _migrate_trello_card_to_jira_issue(
 
     # 6) Copy attachments (download from Trello, upload to Jira)
     for a in attachments:
-        att_url = a.get("url")
+        att_id = a.get("id")
         name = a.get("name") or "attachment"
-        if not att_url:
+        if not att_id:
             continue
         try:
-            # Download via Trello session adding key/token so private attachments are accessible.
-            params = {
-                "key": trello_client.api_key,  # type: ignore[attr-defined]
-                "token": trello_client.api_token,  # type: ignore[attr-defined]
+            # Download via Trello API using card & attachment id, authenticated by key/token.
+            download_url = trello_client._url(  # type: ignore[attr-defined]
+                f"/cards/{card_id}/attachments/{att_id}/download"
+            )
+            params = {  # type: ignore[attr-defined]
+                "key": trello_client.api_key,
+                "token": trello_client.api_token,
             }
-            resp = trello_client.session.get(att_url, params=params, stream=True)  # type: ignore[attr-defined]
+            resp = trello_client.session.get(download_url, params=params, stream=True)  # type: ignore[attr-defined]
             resp.raise_for_status()
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 for chunk in resp.iter_content(chunk_size=8192):
@@ -1545,15 +1548,18 @@ def _sync_trello_attachments_for_card_to_jira(
 
     uploaded = 0
     for a in attachments:
-        att_url = a.get("url")
-        if not att_url:
+        att_id = a.get("id")
+        if not att_id:
             continue
         try:
-            params = {
-                "key": trello_client.api_key,  # type: ignore[attr-defined]
-                "token": trello_client.api_token,  # type: ignore[attr-defined]
+            download_url = trello_client._url(  # type: ignore[attr-defined]
+                f"/cards/{card.get('id')}/attachments/{att_id}/download"
+            )
+            params = {  # type: ignore[attr-defined]
+                "key": trello_client.api_key,
+                "token": trello_client.api_token,
             }
-            resp = trello_client.session.get(att_url, params=params, stream=True)  # type: ignore[attr-defined]
+            resp = trello_client.session.get(download_url, params=params, stream=True)  # type: ignore[attr-defined]
             resp.raise_for_status()
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 for chunk in resp.iter_content(chunk_size=8192):
