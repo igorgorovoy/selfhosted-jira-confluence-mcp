@@ -487,6 +487,21 @@ class TrelloClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_card(self, card_id: str) -> Dict[str, Any]:
+        """
+        Get full information about a single card.
+        """
+        resp = self.session.get(
+            self._url(f"/cards/{card_id}"),
+            params=self._params(
+                {
+                    "fields": "name,desc,idBoard,idList,url,shortUrl,due,labels,idMembers",
+                }
+            ),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def move_card_to_list(self, card_id: str, target_list_id: str) -> Dict[str, Any]:
         """
         Move card to another list.
@@ -505,6 +520,24 @@ class TrelloClient:
         resp = self.session.get(
             self._url(f"/cards/{card_id}/attachments"),
             params=self._params({"fields": "id,name,url,bytes,date,edgeColor"}),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_card_comments(self, card_id: str) -> List[Dict[str, Any]]:
+        """
+        Get comment actions for a card.
+
+        Wrapper around /cards/{id}/actions?filter=commentCard.
+        """
+        resp = self.session.get(
+            self._url(f"/cards/{card_id}/actions"),
+            params=self._params(
+                {
+                    "filter": "commentCard",
+                    "fields": "type,date,data,memberCreator",
+                }
+            ),
         )
         resp.raise_for_status()
         return resp.json()
@@ -1166,6 +1199,34 @@ def trello_get_cards(list_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+def trello_get_card(card_id: str) -> Dict[str, Any]:
+    """
+    Get detailed information about a Trello card.
+
+    Useful for migrations to Jira (summary, description, urls, labels, etc.).
+    """
+    client = get_trello_client_singleton()
+    try:
+        data = client.get_card(card_id=card_id)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello get_card failed: {e}") from e
+
+    return {
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "desc": data.get("desc"),
+        "idBoard": data.get("idBoard"),
+        "idList": data.get("idList"),
+        "url": data.get("url"),
+        "shortUrl": data.get("shortUrl"),
+        "due": data.get("due"),
+        "labels": data.get("labels"),
+        "idMembers": data.get("idMembers"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
 def trello_move_list_to_board(list_id: str, target_board_id: str) -> Dict[str, Any]:
     """
     Move Trello list to another board.
@@ -1230,6 +1291,36 @@ def trello_get_card_attachments(card_id: str) -> Dict[str, Any]:
     return {
         "attachments": simplified,
         "raw": attachments,
+    }
+
+
+@mcp.tool()
+def trello_get_card_comments(card_id: str) -> Dict[str, Any]:
+    """
+    Get comments for a Trello card.
+    """
+    client = get_trello_client_singleton()
+    try:
+        actions = client.get_card_comments(card_id=card_id)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello get_card_comments failed: {e}") from e
+
+    simplified: List[Dict[str, Any]] = []
+    for a in actions:
+        data = a.get("data") or {}
+        simplified.append(
+            {
+                "id": a.get("id"),
+                "date": a.get("date"),
+                "type": a.get("type"),
+                "text": (data.get("text") or data.get("textData", {}).get("text")),
+                "memberCreator": (a.get("memberCreator") or {}).get("username"),
+            }
+        )
+
+    return {
+        "comments": simplified,
+        "raw": actions,
     }
 
 
