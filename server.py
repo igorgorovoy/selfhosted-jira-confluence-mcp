@@ -1502,6 +1502,140 @@ def jira_migrate_trello_board_to_project(
     }
 
 
+def _sync_trello_attachments_for_card_to_jira(
+    trello_client: TrelloClient,
+    jira_client: JiraClient,
+    project_key: str,
+    card: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Internal helper: given a Trello card, find matching Jira issue by summary
+    in the target project and upload all Trello attachments into that issue.
+    """
+    card_id = card.get("id")
+    card_name = card.get("name") or ""
+    if not card_id or not card_name:
+        raise RuntimeError("Card must have id and name")
+
+    # 1) Find existing Jira issue by exact summary match in target project
+    # Escape quotes for JQL and search by phrase match (~) instead of '='.
+    escaped_summary = card_name.replace("\\", "\\\\").replace('"', '\\"')
+    phrase = f'\\"{escaped_summary}\\"'
+    jql = f'project = "{project_key}" AND summary ~ "{phrase}"'
+    search = jira_client.search_issues(jql=jql, max_results=2)
+    issues = search.get("issues", [])
+    if not issues:
+        raise RuntimeError(f"No Jira issue found in project {project_key} for card summary '{card_name}'")
+    if len(issues) > 1:
+        raise RuntimeError(f"Multiple Jira issues found in project {project_key} for card summary '{card_name}'")
+
+    issue_key = issues[0].get("key")
+    if not issue_key:
+        raise RuntimeError("Matched Jira issue has no key")
+
+    # 2) Fetch Trello attachments
+    attachments = trello_client.get_card_attachments(card_id)
+    if not attachments:
+        return {
+            "card_id": card_id,
+            "card_name": card_name,
+            "issue_key": issue_key,
+            "uploaded": 0,
+        }
+
+    uploaded = 0
+    for a in attachments:
+        att_url = a.get("url")
+        if not att_url:
+            continue
+        try:
+            params = {
+                "key": trello_client.api_key,  # type: ignore[attr-defined]
+                "token": trello_client.api_token,  # type: ignore[attr-defined]
+            }
+            resp = trello_client.session.get(att_url, params=params, stream=True)  # type: ignore[attr-defined]
+            resp.raise_for_status()
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    tmp.write(chunk)
+                tmp_path = tmp.name
+            try:
+                jira_client.add_attachment(issue_key, tmp_path)
+                uploaded += 1
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+        except Exception as e:
+            # Пишемо часткову помилку, але не падаємо повністю на картці
+            raise RuntimeError(f"Failed to sync attachment for card '{card_name}': {e}") from e
+
+    return {
+        "card_id": card_id,
+        "card_name": card_name,
+        "issue_key": issue_key,
+        "uploaded": uploaded,
+    }
+
+
+@mcp.tool()
+def jira_sync_trello_attachments_to_project(
+    board_id: str,
+    project_key: str,
+) -> Dict[str, Any]:
+    """
+    Sync Trello attachments into *existing* Jira issues in a project.
+
+    Передумова:
+      - Задачі вже створені в Jira (наприклад, через jira_migrate_trello_board_to_project)
+      - Summary Jira-issues збігаються з Trello card name
+
+    Що робить:
+      - Для кожної картки на дошці шукає одну Jira-задачу в target project за summary
+      - Для кожного атачменту картки качає файл з Trello та завантажує в Jira
+      - Не створює нових задач, не змінює опис/коментарі
+    """
+    trello_client = get_trello_client_singleton()
+    jira_client = get_jira_client_singleton()
+
+    synced: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    lists = trello_client.get_lists(board_id)
+    for lst in lists:
+        list_id = lst.get("id")
+        if not list_id:
+            continue
+        cards = trello_client.get_cards_on_list(list_id)
+        for card in cards:
+            try:
+                result = _sync_trello_attachments_for_card_to_jira(
+                    trello_client=trello_client,
+                    jira_client=jira_client,
+                    project_key=project_key,
+                    card=card,
+                )
+                synced.append(result)
+            except Exception as e:
+                errors.append(
+                    {
+                        "card_id": card.get("id"),
+                        "card_name": card.get("name"),
+                        "error": str(e),
+                    }
+                )
+
+    return {
+        "synced_count": len(synced),
+        "error_count": len(errors),
+        "synced": synced,
+        "errors": errors,
+    }
+
+
 @mcp.tool()
 def jira_get_createmeta(
     project_key: str,
