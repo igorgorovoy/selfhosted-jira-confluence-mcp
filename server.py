@@ -27,6 +27,16 @@ class JiraConfig:
     api_token: str
 
 
+@dataclass
+class TrelloConfig:
+    api_key: str
+    api_token: str
+    # Trello SaaS API base is usually https://api.trello.com/1
+    base_url: str
+    # Member id or username used to list boards
+    member_id: str
+
+
 def _get_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
@@ -47,6 +57,17 @@ def get_jira_config() -> JiraConfig:
         base_url=_get_env("JIRA_BASE_URL"),
         username=_get_env("JIRA_USERNAME"),
         api_token=_get_env("JIRA_API_TOKEN"),
+    )
+
+
+def get_trello_config() -> TrelloConfig:
+    # BASE URL можна не задавати, якщо використовується хмарний Trello
+    base_url = os.getenv("TRELLO_BASE_URL") or "https://api.trello.com/1"
+    return TrelloConfig(
+        api_key=_get_env("TRELLO_API_KEY"),
+        api_token=_get_env("TRELLO_API_TOKEN"),
+        base_url=base_url.rstrip("/"),
+        member_id=_get_env("TRELLO_MEMBER_ID"),
     )
 
 # --------------------------------------------------------------------
@@ -388,6 +409,107 @@ class JiraClient:
         resp.raise_for_status()
 
 
+class TrelloClient:
+    """
+    Simple Trello REST client.
+
+    Uses API key + token for authentication via query parameters.
+    API reference: https://developer.atlassian.com/cloud/trello/rest/
+    """
+
+    def __init__(self, config: TrelloConfig):
+        self.base_url = config.base_url.rstrip("/")
+        self.api_key = config.api_key
+        self.api_token = config.api_token
+        self.member_id = config.member_id
+        self.session = requests.Session()
+        self.session.headers.update({"Accept": "application/json"})
+
+    def _url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
+
+    def _params(self, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "key": self.api_key,
+            "token": self.api_token,
+        }
+        if extra:
+            params.update(extra)
+        return params
+
+    # ---------- Boards ----------
+
+    def get_boards(self) -> List[Dict[str, Any]]:
+        """
+        Get all boards for configured member.
+        """
+        resp = self.session.get(
+            self._url(f"/members/{self.member_id}/boards"),
+            params=self._params({"fields": "name,url,id"}),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ---------- Lists ----------
+
+    def get_lists(self, board_id: str) -> List[Dict[str, Any]]:
+        """
+        Get lists on a board.
+        """
+        resp = self.session.get(
+            self._url(f"/boards/{board_id}/lists"),
+            params=self._params({"cards": "none", "fields": "name,id,idBoard,pos"}),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def move_list_to_board(self, list_id: str, target_board_id: str) -> Dict[str, Any]:
+        """
+        Move list to another board.
+        """
+        resp = self.session.put(
+            self._url(f"/lists/{list_id}/idBoard"),
+            params=self._params({"value": target_board_id}),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ---------- Cards ----------
+
+    def get_cards_on_list(self, list_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all cards on a list.
+        """
+        resp = self.session.get(
+            self._url(f"/lists/{list_id}/cards"),
+            params=self._params({"fields": "name,id,idBoard,idList,url,shortUrl"}),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def move_card_to_list(self, card_id: str, target_list_id: str) -> Dict[str, Any]:
+        """
+        Move card to another list.
+        """
+        resp = self.session.put(
+            self._url(f"/cards/{card_id}/idList"),
+            params=self._params({"value": target_list_id}),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_card_attachments(self, card_id: str) -> List[Dict[str, Any]]:
+        """
+        Get attachments for a card.
+        """
+        resp = self.session.get(
+            self._url(f"/cards/{card_id}/attachments"),
+            params=self._params({"fields": "id,name,url,bytes,date,edgeColor"}),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # --------------------------------------------------------------------
 #  MCP server (FastMCP)
 # --------------------------------------------------------------------
@@ -399,6 +521,7 @@ mcp = FastMCP("Atlassian MCP (Jira + Confluence)")
 
 _confluence_client: Optional[ConfluenceClient] = None
 _jira_client: Optional[JiraClient] = None
+_trello_client: Optional[TrelloClient] = None
 
 
 def get_confluence_client_singleton() -> ConfluenceClient:
@@ -413,6 +536,13 @@ def get_jira_client_singleton() -> JiraClient:
     if _jira_client is None:
         _jira_client = JiraClient(get_jira_config())
     return _jira_client
+
+
+def get_trello_client_singleton() -> TrelloClient:
+    global _trello_client
+    if _trello_client is None:
+        _trello_client = TrelloClient(get_trello_config())
+    return _trello_client
 
 
 # ---------------- Confluence tools -----------------
@@ -944,6 +1074,162 @@ def jira_delete_project(key: str) -> Dict[str, Any]:
     return {
         "key": key,
         "deleted": True,
+    }
+
+
+# ---------------- Trello tools -----------------
+
+
+@mcp.tool()
+def trello_get_boards() -> Dict[str, Any]:
+    """
+    Get Trello boards for configured member.
+    """
+    client = get_trello_client_singleton()
+    try:
+        boards = client.get_boards()
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello get_boards failed: {e}") from e
+
+    simplified: List[Dict[str, Any]] = []
+    for b in boards:
+        simplified.append(
+            {
+                "id": b.get("id"),
+                "name": b.get("name"),
+                "url": b.get("url"),
+            }
+        )
+
+    return {
+        "boards": simplified,
+        "raw": boards,
+    }
+
+
+@mcp.tool()
+def trello_get_lists(board_id: str) -> Dict[str, Any]:
+    """
+    Get lists on a Trello board.
+    """
+    client = get_trello_client_singleton()
+    try:
+        lists = client.get_lists(board_id=board_id)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello get_lists failed: {e}") from e
+
+    simplified: List[Dict[str, Any]] = []
+    for lst in lists:
+        simplified.append(
+            {
+                "id": lst.get("id"),
+                "name": lst.get("name"),
+                "idBoard": lst.get("idBoard"),
+                "pos": lst.get("pos"),
+            }
+        )
+
+    return {
+        "lists": simplified,
+        "raw": lists,
+    }
+
+
+@mcp.tool()
+def trello_get_cards(list_id: str) -> Dict[str, Any]:
+    """
+    Get all cards on a Trello list.
+    """
+    client = get_trello_client_singleton()
+    try:
+        cards = client.get_cards_on_list(list_id=list_id)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello get_cards failed: {e}") from e
+
+    simplified: List[Dict[str, Any]] = []
+    for c in cards:
+        simplified.append(
+            {
+                "id": c.get("id"),
+                "name": c.get("name"),
+                "idBoard": c.get("idBoard"),
+                "idList": c.get("idList"),
+                "url": c.get("url"),
+                "shortUrl": c.get("shortUrl"),
+            }
+        )
+
+    return {
+        "cards": simplified,
+        "raw": cards,
+    }
+
+
+@mcp.tool()
+def trello_move_list_to_board(list_id: str, target_board_id: str) -> Dict[str, Any]:
+    """
+    Move Trello list to another board.
+    """
+    client = get_trello_client_singleton()
+    try:
+        data = client.move_list_to_board(list_id=list_id, target_board_id=target_board_id)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello move_list_to_board failed: {e}") from e
+
+    return {
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "idBoard": data.get("idBoard"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
+def trello_move_card_to_list(card_id: str, target_list_id: str) -> Dict[str, Any]:
+    """
+    Move Trello card to another list.
+    """
+    client = get_trello_client_singleton()
+    try:
+        data = client.move_card_to_list(card_id=card_id, target_list_id=target_list_id)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello move_card_to_list failed: {e}") from e
+
+    return {
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "idBoard": data.get("idBoard"),
+        "idList": data.get("idList"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
+def trello_get_card_attachments(card_id: str) -> Dict[str, Any]:
+    """
+    Get attachments for a Trello card.
+    """
+    client = get_trello_client_singleton()
+    try:
+        attachments = client.get_card_attachments(card_id=card_id)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Trello get_card_attachments failed: {e}") from e
+
+    simplified: List[Dict[str, Any]] = []
+    for a in attachments:
+        simplified.append(
+            {
+                "id": a.get("id"),
+                "name": a.get("name"),
+                "url": a.get("url"),
+                "bytes": a.get("bytes"),
+                "date": a.get("date"),
+            }
+        )
+
+    return {
+        "attachments": simplified,
+        "raw": attachments,
     }
 
 
