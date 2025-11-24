@@ -1410,8 +1410,12 @@ def _migrate_trello_card_to_jira_issue(
         if not att_url:
             continue
         try:
-            # Download via Trello session so private URLs also work
-            resp = trello_client.session.get(att_url, stream=True)  # type: ignore[attr-defined]
+            # Download via Trello session adding key/token so private attachments are accessible.
+            params = {
+                "key": trello_client.api_key,  # type: ignore[attr-defined]
+                "token": trello_client.api_token,  # type: ignore[attr-defined]
+            }
+            resp = trello_client.session.get(att_url, params=params, stream=True)  # type: ignore[attr-defined]
             resp.raise_for_status()
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 for chunk in resp.iter_content(chunk_size=8192):
