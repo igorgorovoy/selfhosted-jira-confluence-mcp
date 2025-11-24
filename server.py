@@ -1,5 +1,7 @@
 import os
+import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -251,6 +253,7 @@ class JiraClient:
 
     def __init__(self, config: JiraConfig):
         self.base_url = config.base_url.rstrip("/")
+        self.username = config.username
         self.session = requests.Session()
         self.session.auth = (config.username, config.api_token)
         self.session.headers.update(
@@ -1321,6 +1324,177 @@ def trello_get_card_comments(card_id: str) -> Dict[str, Any]:
     return {
         "comments": simplified,
         "raw": actions,
+    }
+
+
+# ---------------- Trello → Jira migration helpers -----------------
+
+
+def _migrate_trello_card_to_jira_issue(
+    trello_client: TrelloClient,
+    jira_client: JiraClient,
+    project_key: str,
+    issue_type: str,
+    card_id: str,
+    list_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Internal helper: migrate single Trello card to Jira issue.
+    """
+    # 1) Load Trello data
+    card = trello_client.get_card(card_id)
+    comments = trello_client.get_card_comments(card_id)
+    attachments = trello_client.get_card_attachments(card_id)
+
+    summary = card.get("name") or "Trello card without name"
+    url = card.get("url")
+
+    # 2) Build Jira description
+    desc_lines: List[str] = []
+    desc_lines.append(f"*Trello list:* {list_name or ''}")
+    if url:
+        desc_lines.append(f"*Trello card:* {url}")
+    desc_lines.append("")
+
+    card_desc = (card.get("desc") or "").strip()
+    if card_desc:
+        desc_lines.append(card_desc)
+        desc_lines.append("")
+
+    if attachments:
+        desc_lines.append("h3. Trello attachments")
+        for a in attachments:
+            desc_lines.append(f"* [{a.get('name')}]({a.get('url')})")
+        desc_lines.append("")
+
+    description = "\n".join(desc_lines).strip()
+
+    # 3) Extra fields (due date, reporter, etc.)
+    extra_fields: Dict[str, Any] = {}
+    due = card.get("due")
+    if due:
+        # Trello due is ISO datetime, Jira expects YYYY-MM-DD
+        extra_fields["duedate"] = due[:10]
+    else:
+        # fallback: today in UTC – helps if project requires due date
+        extra_fields["duedate"] = datetime.now(timezone.utc).date().isoformat()
+
+    extra_fields["reporter"] = {"name": jira_client.username}
+
+    # 4) Create Jira issue
+    issue = jira_client.create_issue(
+        project_key=project_key,
+        issue_type=issue_type,
+        summary=summary,
+        description=description,
+        extra_fields=extra_fields,
+    )
+
+    issue_key = issue.get("key")
+
+    # 5) Copy comments
+    for action in comments:
+        data = action.get("data") or {}
+        text = data.get("text") or (data.get("textData") or {}).get("text")
+        if not text:
+            continue
+        author = (action.get("memberCreator") or {}).get("username") or "trello-user"
+        date = action.get("date") or ""
+        body = f"[from Trello @{author} | {date}]\n{text}"
+        jira_client.add_comment(issue_key, body)
+
+    # 6) Copy attachments (download from Trello, upload to Jira)
+    for a in attachments:
+        att_url = a.get("url")
+        name = a.get("name") or "attachment"
+        if not att_url:
+            continue
+        try:
+            # Download via Trello session so private URLs also work
+            resp = trello_client.session.get(att_url, stream=True)  # type: ignore[attr-defined]
+            resp.raise_for_status()
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    tmp.write(chunk)
+                tmp_path = tmp.name
+            try:
+                jira_client.add_attachment(issue_key, tmp_path)
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+        except Exception:
+            # Не завалюємо міграцію картки через один невдалий атачмент
+            continue
+
+    return issue
+
+
+@mcp.tool()
+def jira_migrate_trello_board_to_project(
+    board_id: str,
+    project_key: str,
+    issue_type: str = "Task",
+) -> Dict[str, Any]:
+    """
+    Migrate all Trello cards from a board into a Jira project.
+
+    - Створює задачу в Jira для кожної картки Trello
+    - Копіює опис, додає посилання на Trello
+    - Додає коментарі з Trello як Jira-коментарі (з автором і датою)
+    - Скачувує й завантажує вкладення в Jira
+    """
+    trello_client = get_trello_client_singleton()
+    jira_client = get_jira_client_singleton()
+
+    migrated: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    lists = trello_client.get_lists(board_id)
+    for lst in lists:
+        list_id = lst.get("id")
+        list_name = lst.get("name")
+        if not list_id:
+            continue
+        cards = trello_client.get_cards_on_list(list_id)
+        for card in cards:
+            card_id = card.get("id")
+            card_name = card.get("name")
+            if not card_id:
+                continue
+            try:
+                issue = _migrate_trello_card_to_jira_issue(
+                    trello_client=trello_client,
+                    jira_client=jira_client,
+                    project_key=project_key,
+                    issue_type=issue_type,
+                    card_id=card_id,
+                    list_name=list_name,
+                )
+                migrated.append(
+                    {
+                        "card_id": card_id,
+                        "card_name": card_name,
+                        "issue_key": issue.get("key"),
+                    }
+                )
+            except Exception as e:
+                errors.append(
+                    {
+                        "card_id": card_id,
+                        "card_name": card_name,
+                        "error": str(e),
+                    }
+                )
+
+    return {
+        "migrated_count": len(migrated),
+        "error_count": len(errors),
+        "migrated": migrated,
+        "errors": errors,
     }
 
 
