@@ -153,6 +153,53 @@ class ConfluenceClient:
         resp.raise_for_status()
         return resp.json()
 
+    def add_comment(self, page_id: str, body_storage: str) -> Dict[str, Any]:
+        """
+        Add a comment to a Confluence page (storage format).
+
+        Wrapper around POST /rest/api/content with type=comment.
+        """
+        payload: Dict[str, Any] = {
+            "type": "comment",
+            "container": {
+                "id": page_id,
+                "type": "page",
+            },
+            "body": {
+                "storage": {
+                    "value": body_storage,
+                    "representation": "storage",
+                }
+            },
+        }
+        resp = self.session.post(self._url("/content"), json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def add_attachment(self, page_id: str, file_path: str, comment: Optional[str] = None) -> Any:
+        """
+        Add an attachment to a Confluence page.
+
+        Wrapper around POST /rest/api/content/{id}/child/attachment with multipart upload.
+        """
+        url = self._url(f"/content/{page_id}/child/attachment")
+        headers = dict(self.session.headers)
+        # Let requests set proper multipart Content-Type.
+        headers.pop("Content-Type", None)
+        headers["X-Atlassian-Token"] = "no-check"
+
+        from os.path import basename
+
+        data = {}
+        if comment:
+            data["comment"] = comment
+
+        with open(file_path, "rb") as f:
+            files = {"file": (basename(file_path), f)}
+            resp = self.session.post(url, headers=headers, files=files, data=data or None)
+        resp.raise_for_status()
+        return resp.json()
+
     def delete_page(self, page_id: str, status: str = "current") -> None:
         """
         Delete a Confluence page by ID.
@@ -236,6 +283,35 @@ class JiraClient:
             payload["fields"].update(extra_fields)
 
         resp = self.session.post(self._url("/issue"), json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def add_comment(self, issue_key: str, body: str) -> Dict[str, Any]:
+        """
+        Add a comment to a Jira issue.
+        """
+        payload = {"body": body}
+        resp = self.session.post(self._url(f"/issue/{issue_key}/comment"), json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def add_attachment(self, issue_key: str, file_path: str) -> Any:
+        """
+        Add an attachment to a Jira issue.
+
+        Uses the /issue/{key}/attachments endpoint with multipart upload.
+        """
+        url = self._url(f"/issue/{issue_key}/attachments")
+        headers = dict(self.session.headers)
+        # Let requests set proper multipart Content-Type.
+        headers.pop("Content-Type", None)
+        headers["X-Atlassian-Token"] = "no-check"
+
+        from os.path import basename
+
+        with open(file_path, "rb") as f:
+            files = {"file": (basename(file_path), f)}
+            resp = self.session.post(url, headers=headers, files=files)
         resp.raise_for_status()
         return resp.json()
 
@@ -508,6 +584,50 @@ def confluence_create_space(
 
 
 @mcp.tool()
+def confluence_add_comment(page_id: str, body_storage: str) -> Dict[str, Any]:
+    """
+    Add a comment to a Confluence page (storage format).
+    """
+    client = get_confluence_client_singleton()
+    try:
+        data = client.add_comment(page_id=page_id, body_storage=body_storage)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Confluence add_comment failed: {e}") from e
+
+    return {
+        "id": data.get("id"),
+        "status": data.get("status"),
+        "title": data.get("title"),
+        "links": data.get("_links"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
+def confluence_add_attachment(
+    page_id: str,
+    file_path: str,
+    comment: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Add an attachment to a Confluence page.
+
+    WARNING: this uploads a local file to Confluence.
+    """
+    client = get_confluence_client_singleton()
+    try:
+        data = client.add_attachment(page_id=page_id, file_path=file_path, comment=comment)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Confluence add_attachment failed: {e}") from e
+
+    first = (data or [None])[0] if isinstance(data, list) else data
+    return {
+        "attachment": first,
+        "raw": data,
+    }
+
+
+@mcp.tool()
 def confluence_delete_page(page_id: str, status: str = "current") -> Dict[str, Any]:
     """
     Delete a Confluence page by ID (6.14.1 Server/DC).
@@ -664,6 +784,48 @@ def jira_create_issue(
         "key": data.get("key"),
         "id": data.get("id"),
         "self": data.get("self"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
+def jira_add_comment(issue_key: str, body: str) -> Dict[str, Any]:
+    """
+    Add a comment to a Jira issue.
+    """
+    client = get_jira_client_singleton()
+    try:
+        data = client.add_comment(issue_key=issue_key, body=body)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Jira add_comment failed: {e}") from e
+
+    return {
+        "id": data.get("id"),
+        "self": data.get("self"),
+        "body": data.get("body"),
+        "author": ((data.get("author") or {}).get("displayName")),
+        "created": data.get("created"),
+        "raw": data,
+    }
+
+
+@mcp.tool()
+def jira_add_attachment(issue_key: str, file_path: str) -> Dict[str, Any]:
+    """
+    Add an attachment to a Jira issue.
+
+    WARNING: this uploads a local file to Jira.
+    """
+    client = get_jira_client_singleton()
+    try:
+        data = client.add_attachment(issue_key=issue_key, file_path=file_path)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Jira add_attachment failed: {e}") from e
+
+    # Jira returns a list of attachment objects; we expose the first one and raw list.
+    first = (data or [None])[0] if isinstance(data, list) else data
+    return {
+        "attachment": first,
         "raw": data,
     }
 
