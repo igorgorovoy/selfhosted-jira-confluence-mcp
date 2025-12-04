@@ -1440,7 +1440,6 @@ def _migrate_trello_card_to_jira_issue(
     return issue
 
 
-@mcp.tool()
 def jira_migrate_trello_board_to_project(
     board_id: str,
     project_key: str,
@@ -1503,6 +1502,22 @@ def jira_migrate_trello_board_to_project(
         "migrated": migrated,
         "errors": errors,
     }
+
+
+@mcp.tool()
+def jira_migrate_trello(
+    board_id: str,
+    project_key: str,
+    issue_type: str = "Task",
+) -> Dict[str, Any]:
+    """
+    Short-named MCP tool: delegate to jira_migrate_trello_board_to_project.
+    """
+    return jira_migrate_trello_board_to_project(
+        board_id=board_id,
+        project_key=project_key,
+        issue_type=issue_type,
+    )
 
 
 def _sync_trello_attachments_for_card_to_jira(
@@ -1587,7 +1602,6 @@ def _sync_trello_attachments_for_card_to_jira(
     }
 
 
-@mcp.tool()
 def jira_sync_trello_attachments_to_project(
     board_id: str,
     project_key: str,
@@ -1640,6 +1654,20 @@ def jira_sync_trello_attachments_to_project(
         "synced": synced,
         "errors": errors,
     }
+
+
+@mcp.tool()
+def jira_sync_trello_atts(
+    board_id: str,
+    project_key: str,
+) -> Dict[str, Any]:
+    """
+    Short-named MCP tool: delegate to jira_sync_trello_attachments_to_project.
+    """
+    return jira_sync_trello_attachments_to_project(
+        board_id=board_id,
+        project_key=project_key,
+    )
 
 
 @mcp.tool()
